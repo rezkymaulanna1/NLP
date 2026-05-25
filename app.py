@@ -305,64 +305,420 @@ elif page == "🔍 Uji Model":
     st.header("🔍 Uji Model — Prediksi Status Harga")
 
     col1, col2, col3 = st.columns(3)
+
     with col1:
         model_sel = st.selectbox("Model:", list(results.keys()))
-    with col2:
-        komoditas = st.text_input("Nama Komoditas:", value="bawang merah")
-    with col3:
-        provinsi = st.selectbox("Provinsi:", PROVINCES)
 
-    if st.button("🔮 Prediksi", type="primary", use_container_width=True):
-        text  = clean_text(f"{komoditas} {provinsi}")
-        vec   = results[model_sel]["vec"]
-        clf   = results[model_sel]["clf"]
-        pred  = clf.predict(vec.transform([text]))[0]
+    with col2:
+        komoditas = st.text_input(
+            "Nama Komoditas:",
+            value="bawang merah"
+        )
+
+    with col3:
+        provinsi = st.selectbox(
+            "Provinsi:",
+            PROVINCES
+        )
+
+    # =========================================================
+    # SINGLE PREDICTION
+    # =========================================================
+
+    if st.button(
+        "🔮 Prediksi",
+        type="primary",
+        use_container_width=True
+    ):
+
+        text = clean_text(f"{komoditas} {provinsi}")
+
+        vec = results[model_sel]["vec"]
+        clf = results[model_sel]["clf"]
+
+        pred = clf.predict(vec.transform([text]))[0]
         proba = clf.predict_proba(vec.transform([text]))[0]
 
-        st.markdown(f"""
-        <div style="background:{COLOR[pred]};color:white;padding:1.5rem;
-                    border-radius:12px;text-align:center;margin:1rem 0">
-            <h2 style="margin:0">Status Harga: {pred}</h2>
-            <p style="margin:0.3rem 0 0">{komoditas.title()} · {provinsi.title()}</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            f"""
+            <div style="
+                background:{COLOR[pred]};
+                color:white;
+                padding:1.5rem;
+                border-radius:12px;
+                text-align:center;
+                margin:1rem 0
+            ">
+                <h2 style="margin:0">
+                    Status Harga: {pred}
+                </h2>
+
+                <p style="margin:0.3rem 0 0">
+                    {komoditas.title()} · {provinsi.title()}
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         prob_df = pd.DataFrame({
-            "Kelas": clf.classes_, "Probabilitas": proba
-        }).sort_values("Probabilitas", ascending=True)
+            "Kelas": clf.classes_,
+            "Probabilitas": proba
+        }).sort_values(
+            "Probabilitas",
+            ascending=True
+        )
 
         fig_p, ax_p = plt.subplots(figsize=(6, 3))
-        ax_p.barh(prob_df["Kelas"], prob_df["Probabilitas"],
-                  color=[COLOR[k] for k in prob_df["Kelas"]])
+
+        ax_p.barh(
+            prob_df["Kelas"],
+            prob_df["Probabilitas"],
+            color=[COLOR[k] for k in prob_df["Kelas"]]
+        )
+
         for i, v in enumerate(prob_df["Probabilitas"]):
-            ax_p.text(v + 0.005, i, f"{v:.3f}", va="center",
-                      fontsize=11, fontweight="bold")
+            ax_p.text(
+                v + 0.005,
+                i,
+                f"{v:.3f}",
+                va="center",
+                fontsize=11,
+                fontweight="bold"
+            )
+
         ax_p.set_xlim(0, 1.15)
-        ax_p.set_title("Probabilitas per Kelas", fontweight="bold")
+        ax_p.set_title(
+            "Probabilitas per Kelas",
+            fontweight="bold"
+        )
+
         ax_p.grid(axis="x", alpha=0.3)
+
         st.pyplot(fig_p)
 
+    # =========================================================
+    # BATCH PREDICTION
+    # =========================================================
+
     st.markdown("---")
-    st.subheader("Prediksi Batch (Upload CSV)")
-    st.caption("CSV harus punya kolom: nama_komoditas, provinsi")
-    batch_file = st.file_uploader("Upload CSV batch", type=["csv"], key="batch")
+
+    st.subheader("📂 Prediksi Batch (Upload CSV)")
+
+    st.caption("""
+    CSV minimal harus memiliki kolom:
+    - nama_komoditas
+    - provinsi
+
+    Opsional:
+    - label_asli (untuk evaluasi model)
+    """)
+
+    batch_file = st.file_uploader(
+        "Upload CSV batch",
+        type=["csv"],
+        key="batch"
+    )
 
     if batch_file:
+
         bdf = pd.read_csv(batch_file)
+
+        # =====================================================
+        # VALIDASI KOLOM
+        # =====================================================
+
         if {"nama_komoditas", "provinsi"}.issubset(bdf.columns):
+
+            # =================================================
+            # PREPROCESSING
+            # =================================================
+
             bdf["text_input"] = bdf.apply(
-                lambda r: clean_text(f"{r['nama_komoditas']} {r['provinsi']}"),
+                lambda r: clean_text(
+                    f"{r['nama_komoditas']} {r['provinsi']}"
+                ),
                 axis=1
             )
+
             vec = results[model_sel]["vec"]
             clf = results[model_sel]["clf"]
-            bdf["prediksi"] = clf.predict(vec.transform(bdf["text_input"]))
-            st.dataframe(bdf, use_container_width=True)
+
+            X_batch = vec.transform(
+                bdf["text_input"]
+            )
+
+            # =================================================
+            # PREDIKSI
+            # =================================================
+
+            bdf["prediksi"] = clf.predict(X_batch)
+
+            # =================================================
+            # PROBABILITAS / CONFIDENCE
+            # =================================================
+
+            proba = clf.predict_proba(X_batch)
+
+            bdf["confidence"] = np.max(
+                proba,
+                axis=1
+            )
+
+            # =================================================
+            # TAMPILKAN HASIL
+            # =================================================
+
+            st.subheader("📋 Hasil Prediksi Batch")
+
+            st.dataframe(
+                bdf,
+                use_container_width=True
+            )
+
+            # =================================================
+            # EVALUASI MODEL
+            # =================================================
+
+            if "label_asli" in bdf.columns:
+
+                st.markdown("---")
+
+                st.subheader(
+                    "📊 Evaluasi Batch Prediction"
+                )
+
+                y_true = bdf["label_asli"]
+                y_pred = bdf["prediksi"]
+
+                # =============================================
+                # METRICS
+                # =============================================
+
+                col1, col2, col3, col4 = st.columns(4)
+
+                col1.metric(
+                    "Accuracy",
+                    f"{accuracy_score(y_true, y_pred):.3f}"
+                )
+
+                col2.metric(
+                    "Precision",
+                    f"{precision_score(y_true, y_pred, average='weighted', zero_division=0):.3f}"
+                )
+
+                col3.metric(
+                    "Recall",
+                    f"{recall_score(y_true, y_pred, average='weighted', zero_division=0):.3f}"
+                )
+
+                col4.metric(
+                    "F1-Score",
+                    f"{f1_score(y_true, y_pred, average='weighted', zero_division=0):.3f}"
+                )
+
+                # =============================================
+                # CLASSIFICATION REPORT
+                # =============================================
+
+                st.write("### 📋 Classification Report")
+
+                report_df = pd.DataFrame(
+                    classification_report(
+                        y_true,
+                        y_pred,
+                        output_dict=True,
+                        zero_division=0
+                    )
+                ).transpose()
+
+                st.dataframe(
+                    report_df.round(3),
+                    use_container_width=True
+                )
+
+                # =============================================
+                # CONFUSION MATRIX
+                # =============================================
+
+                st.write("### 🔥 Confusion Matrix")
+
+                cm = confusion_matrix(
+                    y_true,
+                    y_pred,
+                    labels=["Mahal", "Normal", "Murah"]
+                )
+
+                fig_cm, ax_cm = plt.subplots(
+                    figsize=(6, 5)
+                )
+
+                sns.heatmap(
+                    cm,
+                    annot=True,
+                    fmt="d",
+                    cmap="Blues",
+                    xticklabels=[
+                        "Mahal",
+                        "Normal",
+                        "Murah"
+                    ],
+                    yticklabels=[
+                        "Mahal",
+                        "Normal",
+                        "Murah"
+                    ],
+                    linewidths=0.5,
+                    annot_kws={"size": 13},
+                    ax=ax_cm
+                )
+
+                ax_cm.set_xlabel("Predicted")
+                ax_cm.set_ylabel("Actual")
+
+                ax_cm.set_title(
+                    "Confusion Matrix Batch",
+                    fontweight="bold"
+                )
+
+                st.pyplot(fig_cm)
+
+                # =============================================
+                # ERROR ANALYSIS
+                # =============================================
+
+                st.write("### ❌ Error Analysis")
+
+                error_df = bdf[
+                    y_true != y_pred
+                ]
+
+                st.metric(
+                    "Jumlah Salah Prediksi",
+                    len(error_df)
+                )
+
+                if len(error_df) > 0:
+
+                    st.dataframe(
+                        error_df[
+                            [
+                                "nama_komoditas",
+                                "provinsi",
+                                "label_asli",
+                                "prediksi",
+                                "confidence"
+                            ]
+                        ],
+                        use_container_width=True
+                    )
+
+                else:
+                    st.success(
+                        "Tidak ada kesalahan prediksi 🎉"
+                    )
+
+            # =================================================
+            # VISUALISASI HASIL PREDIKSI
+            # =================================================
+
+            st.markdown("---")
+
+            st.subheader(
+                "📈 Visualisasi Hasil Prediksi"
+            )
+
+            col1, col2 = st.columns(2)
+
+            # =============================================
+            # PIE CHART PROPORSI PREDIKSI
+            # =============================================
+
+            with col1:
+
+                pred_counts = (
+                    bdf["prediksi"]
+                    .value_counts()
+                )
+
+                fig1, ax1 = plt.subplots(
+                    figsize=(5, 4)
+                )
+
+                ax1.pie(
+                    pred_counts.values,
+                    labels=pred_counts.index,
+                    autopct="%1.1f%%",
+                    colors=[
+                        COLOR[k]
+                        for k in pred_counts.index
+                    ],
+                    startangle=90,
+                    wedgeprops={
+                        "edgecolor": "white",
+                        "linewidth": 2
+                    }
+                )
+
+                ax1.set_title(
+                    "Proporsi Prediksi"
+                )
+
+                st.pyplot(fig1)
+
+            # =============================================
+            # DISTRIBUSI CONFIDENCE
+            # =============================================
+
+            with col2:
+
+                fig2, ax2 = plt.subplots(
+                    figsize=(6, 4)
+                )
+
+                ax2.hist(
+                    bdf["confidence"],
+                    bins=10,
+                    edgecolor="black"
+                )
+
+                ax2.set_title(
+                    "Distribusi Keyakinan Model"
+                )
+
+                ax2.set_xlabel(
+                    "Confidence Score"
+                )
+
+                ax2.set_ylabel(
+                    "Jumlah Data"
+                )
+
+                ax2.grid(alpha=0.3)
+
+                st.pyplot(fig2)
+
+            # =================================================
+            # DOWNLOAD BUTTON
+            # =================================================
+
+            st.markdown("---")
+
             st.download_button(
-                "⬇️ Download Hasil",
+                "⬇️ Download Hasil Prediksi",
                 data=bdf.to_csv(index=False).encode("utf-8"),
                 file_name="hasil_prediksi_batch.csv",
-                mime="text/csv"
+                mime="text/csv",
+                use_container_width=True
             )
+
         else:
-            st.error("CSV harus punya kolom: nama_komoditas dan provinsi")
+
+            st.error("""
+            CSV harus memiliki kolom:
+            - nama_komoditas
+            - provinsi
+
+            Opsional:
+            - label_asli
+            """)
