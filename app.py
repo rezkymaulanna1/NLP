@@ -300,3 +300,169 @@ elif page == "🤖 Training & Evaluasi":
         ax_cm.set_xlabel("Predicted"); ax_cm.set_ylabel("Actual")
         st.pyplot(fig_cm)
 
+# ── Uji Model ─────────────────────────────────────────────────────────────────
+elif page == "🔍 Uji Model":
+    st.header("🔍 Uji Model — Prediksi Status Harga")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        model_sel = st.selectbox("Model yang Digunakan:", list(results.keys()))
+    with col2:
+        komoditas = st.text_input("Nama Komoditas:", value="bawang merah")
+    with col3:
+        provinsi = st.selectbox("Provinsi:", PROVINCES)
+
+    if st.button("🔮 Prediksi Single", type="primary", use_container_width=True):
+        text  = clean_text(f"{komoditas} {provinsi}")
+        vec   = results[model_sel]["vec"]
+        clf   = results[model_sel]["clf"]
+        pred  = clf.predict(vec.transform([text]))[0]
+        proba = clf.predict_proba(vec.transform([text]))[0]
+
+        st.markdown(f"""
+        <div style="background:{COLOR[pred]};color:white;padding:1.5rem;
+                    border-radius:12px;text-align:center;margin:1rem 0">
+            <h2 style="margin:0">Status Harga: {pred}</h2>
+            <p style="margin:0.3rem 0 0">{komoditas.title()} · {provinsi.title()}</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        prob_df = pd.DataFrame({
+            "Kelas": clf.classes_, "Probabilitas": proba
+        }).sort_values("Probabilitas", ascending=True)
+
+        fig_p, ax_p = plt.subplots(figsize=(6, 3))
+        ax_p.barh(prob_df["Kelas"], prob_df["Probabilitas"],
+                  color=[COLOR[k] for k in prob_df["Kelas"]])
+        for i, v in enumerate(prob_df["Probabilitas"]):
+            ax_p.text(v + 0.005, i, f"{v:.3f}", va="center",
+                      fontsize=11, fontweight="bold")
+        ax_p.set_xlim(0, 1.15)
+        ax_p.set_title("Probabilitas per Kelas", fontweight="bold")
+        ax_p.grid(axis="x", alpha=0.3)
+        st.pyplot(fig_p)
+
+    st.markdown("---")
+    st.subheader("📦 Prediksi Batch (Upload CSV)")
+    st.caption("Mendukung format kolom bahasa Indonesia (`nama_komoditas`, `provinsi`) maupun format mentah dataset PIHPS (`Commodity_Name`, `Province_Name`). Jika kolom harga disediakan, evaluasi performa model akan dijalankan otomatis.")
+    batch_file = st.file_uploader("Upload CSV batch", type=["csv"], key="batch")
+
+    if batch_file:
+        bdf = pd.read_csv(batch_file)
+        
+        # Penyelarasan kolom otomatis sesuai dengan dataset yang dilampirkan
+        rename_dict = {
+            "Commodity_Name": "nama_komoditas",
+            "Province_Name":  "provinsi",
+            "Price":          "harga",
+            "Date_Param":     "tanggal"
+        }
+        bdf = bdf.rename(columns={k: v for k, v in rename_dict.items() if k in bdf.columns})
+        
+        if {"nama_komoditas", "provinsi"}.issubset(bdf.columns):
+            bdf["text_input"] = bdf.apply(
+                lambda r: clean_text(f"{r['nama_komoditas']} {r['provinsi']}"),
+                axis=1
+            )
+            vec = results[model_sel]["vec"]
+            clf = results[model_sel]["clf"]
+            
+            # Jalankan prediksi dan kalkulasi probabilitas (keyakinan)
+            X_batch = vec.transform(bdf["text_input"])
+            bdf["prediksi"] = clf.predict(X_batch)
+            proba_batch = clf.predict_proba(X_batch)
+            bdf["keyakinan"] = np.max(proba_batch, axis=1)
+            
+            # Cek ketersediaan ground truth berdasarkan kolom harga
+            if "harga" in bdf.columns and "price_label" not in bdf.columns:
+                bdf["price_label"] = bdf["harga"].apply(
+                    lambda p: "Mahal" if p > mean_h + std_h
+                              else ("Murah" if p < mean_h - std_h else "Normal")
+                )
+            
+            has_ground_truth = "price_label" in bdf.columns
+            st.success(f"Berhasil memproses {len(bdf):,} baris data!")
+            
+            # Preview Data Hasil Prediksi
+            st.write("### 📋 Preview Hasil Prediksi")
+            cols_to_show = ["nama_komoditas", "provinsi", "prediksi", "keyakinan"]
+            if "harga" in bdf.columns: cols_to_show.insert(2, "harga")
+            if has_ground_truth: cols_to_show.insert(3, "price_label")
+            st.dataframe(bdf[cols_to_show].head(100), use_container_width=True)
+            
+            st.download_button(
+                "⬇️ Download Hasil Lengkap (.CSV)",
+                data=bdf.to_csv(index=False).encode("utf-8"),
+                file_name="hasil_prediksi_batch.csv",
+                mime="text/csv"
+            )
+            
+            # Visualisasi Hasil Prediksi
+            st.write("---")
+            st.write("### 📊 Visualisasi Hasil Prediksi Batch")
+            v_col1, v_col2 = st.columns(2)
+            
+            with v_col1:
+                st.write("**Proporsi Prediksi Status Harga**")
+                pred_counts = bdf["prediksi"].value_counts()
+                fig_pred, ax_pred = plt.subplots(figsize=(5, 4))
+                bars = ax_pred.bar(pred_counts.index, pred_counts.values,
+                                   color=[COLOR.get(k, "#34495e") for k in pred_counts.index],
+                                   edgecolor="white", width=0.5)
+                for bar in bars:
+                    ax_pred.text(bar.get_x() + bar.get_width()/2,
+                                 bar.get_height() + (len(bdf) * 0.005 + 1),
+                                 f"{bar.get_height():,}", ha="center",
+                                 fontsize=10, fontweight="bold")
+                ax_pred.set_title("Distribusi Kelas Hasil Prediksi", fontweight="bold")
+                ax_pred.set_xlabel("Status Harga")
+                ax_pred.set_ylabel("Jumlah Data")
+                ax_pred.grid(axis="y", alpha=0.3)
+                st.pyplot(fig_pred)
+                
+            with v_col2:
+                st.write("**Distribusi Keyakinan Model (Model Confidence)**")
+                fig_conf, ax_conf = plt.subplots(figsize=(5, 4))
+                ax_conf.hist(bdf["keyakinan"], bins=15, color="#2980b9", edgecolor="white", alpha=0.8)
+                ax_conf.set_title("Tingkat Keyakinan Prediksi Model", fontweight="bold")
+                ax_conf.set_xlabel("Probabilitas / Skor Keyakinan")
+                ax_conf.set_ylabel("Jumlah Data")
+                ax_conf.grid(axis="y", alpha=0.3)
+                st.pyplot(fig_conf)
+                
+            # Evaluasi & Analisis Kesalahan (Jika ground truth tersedia)
+            if has_ground_truth:
+                st.write("---")
+                st.write("### 🤖 Evaluasi Performa Model pada Data Batch")
+                
+                e_col1, e_col2 = st.columns(2)
+                with e_col1:
+                    st.write("**Classification Report**")
+                    report_dict = classification_report(bdf["price_label"], bdf["prediksi"], output_dict=True, zero_division=0)
+                    st.dataframe(pd.DataFrame(report_dict).transpose().round(3), use_container_width=True)
+                    
+                with e_col2:
+                    st.write("**Confusion Matrix**")
+                    cm_batch = confusion_matrix(bdf["price_label"], bdf["prediksi"], labels=["Mahal", "Normal", "Murah"])
+                    fig_cm_b, ax_cm_b = plt.subplots(figsize=(5, 4))
+                    sns.heatmap(cm_batch, annot=True, fmt="d", cmap="Oranges",
+                                xticklabels=["Mahal", "Normal", "Murah"],
+                                yticklabels=["Mahal", "Normal", "Murah"],
+                                ax=ax_cm_b, linewidths=0.5, annot_kws={"size": 12})
+                    ax_cm_b.set_title("Confusion Matrix — Batch Data", fontweight="bold")
+                    ax_cm_b.set_xlabel("Predicted Label")
+                    ax_cm_b.set_ylabel("Actual Label")
+                    st.pyplot(fig_cm_b)
+                    
+                st.write("#### 🔍 Error Analysis (Analisis Kesalahan Prediksi)")
+                errors = bdf[bdf["price_label"] != bdf["prediksi"]]
+                if not errors.empty:
+                    st.warning(f"Terdeteksi {len(errors):,} kesalahan prediksi dari total {len(bdf):,} data ({len(errors)/len(bdf)*100:.2f}% Error Rate).")
+                    st.write("Tabel sampel di bawah menunjukkan baris data di mana prediksi model meleset dari label aktual:")
+                    err_cols = ["nama_komoditas", "provinsi", "price_label", "prediksi", "keyakinan"]
+                    if "harga" in bdf.columns: err_cols.insert(2, "harga")
+                    st.dataframe(errors[err_cols].head(100), use_container_width=True)
+                else:
+                    st.success("Sempurna! Model berhasil memprediksi seluruh data batch secara tepat (Akurasi 100%).")
+        else:
+            st.error("Format kolom CSV tidak dikenali. Pastikan file memiliki kolom 'nama_komoditas' & 'provinsi' atau 'Commodity_Name' & 'Province_Name'.")
